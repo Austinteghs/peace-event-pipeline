@@ -1,0 +1,39 @@
+parameters:
+  dynamic_params:
+  - states:
+    - Kaduna
+    - Katsina
+    - Benue
+    - Plateau
+    first_run: false
+  
+  search_keywords:
+    - peace dialogue
+    - conflict resolution
+    - peacebuilding
+    - community mediation
+    - reconciliation
+    - violence prevention
+    - early warning
+    - peace agreement
+    - peace training
+    - peace initiative
+  
+  event_types:
+    - Peace Actions
+    - Peace Programmes
+    - Peace Dialogues
+    - Conflict Mediation
+    - Training and Capacity Building
+    - Early Warning Systems
+    - Peace Agreements
+    - Community Engagement
+  
+  other_params:
+    # Date formats:
+    # 1. 'yyyy-mm-dd': No action
+    # 2. '2024-06-21': Single date
+    # 3. ['2024-06-21', '2024-06-23']: Multiple dates
+    # 4. '2024-06-21:2024-06-28': Date range
+    - backfill: 'yyyy-mm-dd'
+    - rerun: 'yyyy-mm-dd'
