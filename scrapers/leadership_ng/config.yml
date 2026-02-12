@@ -1,0 +1,42 @@
+parameters:
+  dynamic_params:
+  - states:
+    - Kaduna
+    - Katsina
+    - Benue
+    - Plateau
+    first_run: false
+  
+  search_keywords:
+    - peace
+    - conflict
+    - peacebuilding
+    - dialogue
+    - reconciliation
+    - mediation
+    - violence prevention
+    - security
+    - kaduna
+    - katsina
+    - benue
+    - plateau
+  
+  event_types:
+    - Peace Actions
+    - Peace Programmes
+    - Peace Dialogues
+    - Conflict Mediation
+    - Training and Capacity Building
+    - Early Warning Systems
+    - Peace Agreements
+    - Community Engagement
+  
+  crawling:
+    enabled: true
+    max_pages: 15
+    delay_seconds: 2
+    follow_article_links: true
+  
+  other_params:
+    - backfill: 'yyyy-mm-dd'
+    - rerun: 'yyyy-mm-dd'

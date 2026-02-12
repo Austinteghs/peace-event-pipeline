@@ -1,0 +1,28 @@
+parameters:
+  dynamic_params:
+  - states:
+    - Plateau
+    first_run: false
+  
+  search_keywords:
+    - peace
+    - dialogue
+    - mediation
+    - reconciliation
+    - conflict resolution
+  
+  event_types:
+    - Peace Actions
+    - Peace Programmes
+    - Peace Dialogues
+    - Conflict Mediation
+  
+  crawling:
+    enabled: true
+    max_pages: 10
+    delay_seconds: 2
+    follow_article_links: true
+  
+  other_params:
+    - backfill: 'yyyy-mm-dd'
+    - rerun: 'yyyy-mm-dd'

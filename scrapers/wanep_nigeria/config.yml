@@ -29,9 +29,18 @@ parameters:
     - Peace Agreements
     - Community Engagement
   
+  # Web Crawling Configuration
+  crawling:
+    enabled: true                # Enable/disable crawling
+    max_pages: 20                # Maximum number of pages to crawl (safety limit)
+    max_depth: 2                 # How deep to follow links (not used in pagination)
+    delay_seconds: 2             # Delay between page requests (be polite!)
+    follow_article_links: true   # Visit individual articles for full content
+    use_sitemap: false           # Try sitemap.xml first (if available)
+  
   other_params:
     # Date formats:
-    # 1. 'yyyy-mm-dd': No action
+    # 1. 'yyyy-mm-dd': No action (scrape today)
     # 2. '2024-06-21': Single date
     # 3. ['2024-06-21', '2024-06-23']: Multiple dates
     # 4. '2024-06-21:2024-06-28': Date range

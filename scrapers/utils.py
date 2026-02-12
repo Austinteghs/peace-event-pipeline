@@ -1,58 +1,62 @@
+"""
+Google Cloud Platform utilities for NPAID Peace Events Scraper
+Replaces AWS S3/SNS with GCS/Pub/Sub
+"""
+
 import logging
-import math
-import io
-import random
-import time
-import traceback
 import hashlib
+import io
+import traceback
 from datetime import datetime, timedelta
 from pyppeteer import launch
 from pyppeteer_stealth import stealth
-import boto3
 import requests
 import asyncio
 import yaml
 from bs4 import BeautifulSoup
-from fake_useragent import UserAgent, FakeUserAgent
+from fake_useragent import UserAgent
 import pandas as pd
 import os
-import awswrangler as wr
 from playwright.sync_api import sync_playwright
-from boto3.s3.transfer import S3UploadFailedError
 from retry import retry
 from pydantic import BaseModel, ValidationError
 
+# Google Cloud imports
+from google.cloud import storage
+from google.cloud import pubsub_v1
+import pyarrow.parquet as pq
+import pyarrow as pa
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-SNS_ARN_DEVELOPERS = os.environ.get('SNS_ARN_DEVELOPERS')
-SNS_ARN_BUSINESS = os.environ.get('SNS_ARN_BUSINESS')
+# Environment variables
+PUBSUB_TOPIC_DEVELOPERS = os.environ.get('PUBSUB_TOPIC_DEVELOPERS')
+PUBSUB_TOPIC_BUSINESS = os.environ.get('PUBSUB_TOPIC_BUSINESS')
 ENV_PROD = os.environ.get('ENV')
-s3_bucket = os.environ.get('S3BUCKET')
-creds = None
-last_update_time = None
+GCS_BUCKET = os.environ.get('GCS_BUCKET')
+GCP_PROJECT_ID = os.environ.get('GCP_PROJECT_ID')
 
+# Initialize GCP clients
 if ENV_PROD:
-    s3_client = boto3.client('s3')
-    sns_client = boto3.client('sns')
+    storage_client = storage.Client()
+    publisher = pubsub_v1.PublisherClient()
     troubleshooting = True if ENV_PROD == 'dev' else False
 else:
-    s3_client = ""
-    sns_client = ""
+    storage_client = None
+    publisher = None
     troubleshooting = True
 
-session = boto3.Session()
 today = datetime.now().date()
 yesterday = today - timedelta(days=1)
 
 # Nigerian states for filtering
 PILOT_STATES = ['Kaduna', 'Katsina', 'Benue', 'Plateau']
 ALL_NIGERIAN_STATES = [
-    'Abia', 'Adamawa', 'Akwa Ibom', 'Anambra', 'Bauchi', 'Bayelsa', 'Benue', 
-    'Borno', 'Cross River', 'Delta', 'Ebonyi', 'Edo', 'Ekiti', 'Enugu', 
-    'Gombe', 'Imo', 'Jigawa', 'Kaduna', 'Kano', 'Katsina', 'Kebbi', 'Kogi', 
-    'Kwara', 'Lagos', 'Nasarawa', 'Niger', 'Ogun', 'Ondo', 'Osun', 'Oyo', 
+    'Abia', 'Adamawa', 'Akwa Ibom', 'Anambra', 'Bauchi', 'Bayelsa', 'Benue',
+    'Borno', 'Cross River', 'Delta', 'Ebonyi', 'Edo', 'Ekiti', 'Enugu',
+    'Gombe', 'Imo', 'Jigawa', 'Kaduna', 'Kano', 'Katsina', 'Kebbi', 'Kogi',
+    'Kwara', 'Lagos', 'Nasarawa', 'Niger', 'Ogun', 'Ondo', 'Osun', 'Oyo',
     'Plateau', 'Rivers', 'Sokoto', 'Taraba', 'Yobe', 'Zamfara', 'FCT'
 ]
 
@@ -62,17 +66,27 @@ def log_if_troubleshooting(string):
         logger.info(string)
 
 
-def publish_error_to_sns(message, arn, source):
+def publish_error_to_pubsub(message, topic_name, source):
+    """Publish error message to Google Cloud Pub/Sub"""
     try:
-        response = sns_client.publish(
-            TopicArn=arn,
-            Message=message,
-            Subject=f'{source.title()} Peace Events Scraper Error',
-            MessageStructure='string'
-        )
-        return response
+        if not ENV_PROD or not publisher or not GCP_PROJECT_ID:
+            logger.warning("Pub/Sub not configured, skipping notification")
+            return None
+        
+        topic_path = publisher.topic_path(GCP_PROJECT_ID, topic_name)
+        
+        # Message must be a bytestring
+        message_data = f"{source.title()} Peace Events Scraper Error:\n\n{message}"
+        data = message_data.encode('utf-8')
+        
+        # Publish message
+        future = publisher.publish(topic_path, data)
+        message_id = future.result()
+        
+        logger.info(f"Published message to {topic_name}: {message_id}")
+        return message_id
     except Exception as e:
-        logger.error(f"Failed to publish message to SNS: {e}")
+        logger.error(f"Failed to publish message to Pub/Sub: {e}")
         return None
 
 
@@ -284,25 +298,27 @@ def validate_dataframe(df: pd.DataFrame, expected_columns):
             raise ValueError(f"Row {index} failed validation: {e}")
 
 
-def load_existing_hashes(s3_bucket, hash_name, hash_file_key):
-    """Load existing event hashes from S3"""
+def load_existing_hashes_gcs(bucket_name, hash_blob_path):
+    """Load existing event hashes from Google Cloud Storage"""
     columns = ['EVENT_ID', 'DATE']
     try:
-        response = s3_client.list_objects(Bucket=s3_bucket, Prefix=hash_file_key)
-
-        if 'Contents' not in response:
+        bucket = storage_client.bucket(bucket_name)
+        blob = bucket.blob(hash_blob_path)
+        
+        if not blob.exists():
             return pd.DataFrame(columns=columns)
-
-        with open(hash_name, 'wb') as hash_file:
-            s3_client.download_fileobj(s3_bucket, hash_file_key, hash_file)
-        existing_hashes_df = pd.read_csv(hash_name)
-
+        
+        # Download to memory
+        hash_content = blob.download_as_bytes()
+        existing_hashes_df = pd.read_csv(io.BytesIO(hash_content))
+        
         if 'EVENT_ID' not in existing_hashes_df.columns or 'DATE' not in existing_hashes_df.columns:
             return pd.DataFrame(columns=columns)
-
+        
         return existing_hashes_df
-
-    except (FileNotFoundError, S3UploadFailedError):
+    
+    except Exception as e:
+        logger.warning(f"Could not load existing hashes: {e}")
         return pd.DataFrame(columns=columns)
 
 
@@ -318,18 +334,26 @@ def load_existing_hashes_local(hash_filename):
         return dataframe
 
 
-def save_new_hashes(new_hashes, s3_bucket, hash_name, hash_file_key):
-    """Save new event hashes to S3"""
+def save_new_hashes_gcs(new_hashes, bucket_name, hash_blob_path):
+    """Save new event hashes to Google Cloud Storage"""
     try:
         columns = ['EVENT_ID', 'DATE']
-        existing_hashes_df = load_existing_hashes(s3_bucket, hash_name, hash_file_key)
+        existing_hashes_df = load_existing_hashes_gcs(bucket_name, hash_blob_path)
         new_hashes_df = pd.DataFrame(new_hashes, columns=columns)
         updated_hashes_df = pd.concat([existing_hashes_df, new_hashes_df]).drop_duplicates(subset='EVENT_ID')
-        updated_hashes_df.to_csv(hash_name, index=False)
-        s3_client.upload_file(hash_name, s3_bucket, hash_file_key)
+        
+        # Upload to GCS
+        bucket = storage_client.bucket(bucket_name)
+        blob = bucket.blob(hash_blob_path)
+        
+        csv_buffer = io.StringIO()
+        updated_hashes_df.to_csv(csv_buffer, index=False)
+        blob.upload_from_string(csv_buffer.getvalue(), content_type='text/csv')
+        
+        logger.info(f"Saved {len(new_hashes)} new hashes to GCS: {hash_blob_path}")
     except Exception as e:
-        logger.info(f"Error saving new hashes to S3: {e}")
-        logger.info(traceback.format_exc())
+        logger.error(f"Error saving new hashes to GCS: {e}")
+        logger.error(traceback.format_exc())
 
 
 def save_new_hashes_local(new_hashes, hash_filename):
@@ -382,9 +406,9 @@ def save_csv_local(event_list, source):
         logger.info(f"DataFrame validation failed: {e}")
 
 
-def upload_csv_to_s3(event_list, source, s3_bucket, hash_name, hash_file_key):
-    """Upload peace events to S3"""
-    existing_hashes = load_existing_hashes(s3_bucket, hash_name, hash_file_key)
+def upload_to_gcs(event_list, source, bucket_name, hash_blob_path):
+    """Upload peace events to Google Cloud Storage as Parquet"""
+    existing_hashes = load_existing_hashes_gcs(bucket_name, hash_blob_path)
     df = pd.DataFrame(event_list)
     df = df.astype(str)
 
@@ -409,43 +433,51 @@ def upload_csv_to_s3(event_list, source, s3_bucket, hash_name, hash_file_key):
         try:
             validate_dataframe(new_events, event_columns)
             logger.info("DataFrame passed validation!")
-            try:
-                s3_key = f's3://{s3_bucket}/peace_events/{source}/{current_datetime}/'
-                wr.s3.to_parquet(
-                    df=new_events,
-                    path=s3_key,
-                    dataset=True,
-                    index=False,
-                    boto3_session=session,
-                )
-                logger.info(f"Writing data to {s3_key}")
-                
-                save_new_hashes(
-                    [(row["EVENT_ID"], row['INGESTION_DATE']) for _, row in new_events.iterrows()],
-                    s3_bucket,
-                    hash_name,
-                    hash_file_key
-                )
-            except Exception as e:
-                logger.info(f"Error writing file and hashing to parquet {e}")
-                logger.info(traceback.format_exc())
-        except ValueError as e:
-            logging.info(f"DataFrame validation failed: {e}")
+            
+            # Convert to Parquet and upload
+            bucket = storage_client.bucket(bucket_name)
+            blob_path = f'peace_events/{source}/{current_datetime}/data.parquet'
+            blob = bucket.blob(blob_path)
+            
+            # Write parquet to buffer
+            table = pa.Table.from_pandas(new_events)
+            parquet_buffer = io.BytesIO()
+            pq.write_table(table, parquet_buffer)
+            parquet_buffer.seek(0)
+            
+            # Upload to GCS
+            blob.upload_from_file(parquet_buffer, content_type='application/octet-stream')
+            logger.info(f"Writing data to gs://{bucket_name}/{blob_path}")
+            
+            # Save hashes
+            save_new_hashes_gcs(
+                [(row["EVENT_ID"], row['INGESTION_DATE']) for _, row in new_events.iterrows()],
+                bucket_name,
+                hash_blob_path
+            )
+        except Exception as e:
+            logger.error(f"Error writing file and hashing to parquet: {e}")
+            logger.error(traceback.format_exc())
 
 
-def rerun_delete(date, source, hash_file_key, hash_name):
-    """Delete data for rerun"""
+def rerun_delete(date, source, hash_blob_path, bucket_name):
+    """Delete data for rerun in GCS"""
     if date != 'yyyy-mm-dd':
-        preprocess_folder_key = f'peace_events/{source}/{date}/'
-
-        df = load_existing_hashes(s3_bucket, hash_name, hash_file_key)
+        blob_prefix = f'peace_events/{source}/{date}/'
+        
+        # Delete hash entries for this date
+        df = load_existing_hashes_gcs(bucket_name, hash_blob_path)
         df = df[df['DATE'] != date]
-        df.to_csv('temp.csv', index=False)
-        with open('temp.csv', 'rb') as file:
-            s3_client.upload_fileobj(file, s3_bucket, hash_file_key)
-        s3_client.delete_objects(
-            Bucket=s3_bucket,
-            Delete={
-                'Objects': [{'Key': preprocess_folder_key}]
-            }
-        )
+        
+        # Save updated hashes
+        bucket = storage_client.bucket(bucket_name)
+        blob = bucket.blob(hash_blob_path)
+        csv_buffer = io.StringIO()
+        df.to_csv(csv_buffer, index=False)
+        blob.upload_from_string(csv_buffer.getvalue(), content_type='text/csv')
+        
+        # Delete data files
+        blobs = bucket.list_blobs(prefix=blob_prefix)
+        for blob in blobs:
+            blob.delete()
+            logger.info(f"Deleted {blob.name}")

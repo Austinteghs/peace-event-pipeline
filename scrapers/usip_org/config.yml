@@ -1,0 +1,53 @@
+parameters:
+  dynamic_params:
+  - states:
+    - Kaduna
+    - Katsina
+    - Benue
+    - Plateau
+    first_run: false
+  
+  search_keywords:
+    - nigeria peace
+    - nigeria conflict
+    - nigeria peacebuilding
+    - nigeria reconciliation
+    - nigeria dialogue
+    - nigeria mediation
+    - kaduna peace
+    - katsina peace
+    - benue peace
+    - plateau peace
+    - north west nigeria
+    - north central nigeria
+  
+  event_types:
+    - Peace Actions
+    - Peace Programmes
+    - Peace Dialogues
+    - Conflict Mediation
+    - Training and Capacity Building
+    - Early Warning Systems
+    - Peace Agreements
+    - Community Engagement
+    - Legislation / Policy
+  
+  # Web Crawling Configuration
+  crawling:
+    enabled: true
+    max_pages: 30                # USIP has extensive publications
+    delay_seconds: 3             # Be respectful to research site
+    follow_article_links: true   # Visit individual publications
+    use_search: true             # Use USIP search functionality
+  
+  # USIP-specific settings
+  usip_settings:
+    base_url: "https://www.usip.org"
+    search_url: "https://www.usip.org/search"
+    publications_url: "https://www.usip.org/publications"
+    regions: ["africa", "nigeria"]
+    content_types: ["analysis", "report", "article", "publication"]
+  
+  other_params:
+    - backfill: 'yyyy-mm-dd'
+    - rerun: 'yyyy-mm-dd'
